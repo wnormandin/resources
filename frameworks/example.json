@@ -1,0 +1,15 @@
+{
+    "auto_check": "1", 
+    "dat_base_path": "resources/games", 
+    "database_path": "tmp/game.db", 
+    "debug": "1", 
+    "dim_x": "25", 
+    "dim_y": "25", 
+    "dim_z": "5", 
+    "flex_dims": "False", 
+    "flex_limit": "0", 
+    "max_loops": "30", 
+    "path_alg": "gbf_search", 
+    "verbose": "1", 
+    "version": "0.1"
+}
