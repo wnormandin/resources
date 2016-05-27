@@ -252,21 +252,18 @@ if __name__=="__main__":
     jobs = []
 
     try:
-        while time.clock()-start <= args.maxtime:
-            for i in range(args.procs):
-                p_conn, c_conn = Pipe()
-                p = Process(
-                            target = Spider,
-                            args = ((args,c_conn),)
-                            )
-                p.start()
-                jobs.append((p,p_conn))
-            if any([j[0].is_alive() for j in jobs]):
-                time.sleep(0.1)
-            else:
-                jobs_join(args,jobs)
+        for i in range(args.procs):
+            p_conn, c_conn = Pipe()
+            p = Process(
+                        target = Spider,
+                        args = ((args,c_conn),)
+                        )
+            p.start()
+            jobs.append((p,p_conn))
+        if any([j[0].is_alive() for j in jobs]):
+            time.sleep(0.1)
         else:
-            job_terminate(args,jobs)
+            jobs_join(args,jobs)
     except KeyboardInterrupt:
         print '\nKeyboard interrupt detected!'
         jobs_terminate(args,jobs)
