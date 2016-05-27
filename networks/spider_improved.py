@@ -7,7 +7,7 @@ import random
 import signal
 import socket
 import time
-import multiprocessing
+from  multiprocessing import Process, Pipe
 import argparse
 import os
 import operator
@@ -55,9 +55,9 @@ class Stats:
         # increment the crawled_count
         self.crawled_count += count
 
-    def time(self,time):
-        # add time to the list for averaging
-        self.times.append(time)
+    def time(self,times):
+        # add times to the list for averaging
+        self.times.extend(times)
 
     def error(self,deets):
         # increment each  error encountered
@@ -71,20 +71,21 @@ class Stats:
 def return_init(cls):
 
     # Allows returns other than the class instance
-    def wrapper(args,kwargs):
+    def wrapper(args,):
 
-        instance = cls(args,kwargs)
+        instance = cls(args,)
         return instance.retval
 
     return wrapper
 
-@return_init
+#@return_init
 class Spider:
 
     """ Spider superclass, contains all essential methods """
 
-    def __init__(self,args,stats):
+    def __init__(self,prms):
         # Takes any argument-containing namespace
+        args,c_conn = prms
         if args.debug:
             print "Spider {} spawned".format(os.getpid())
         self.args = args
@@ -93,18 +94,21 @@ class Spider:
         self.browser = prep_browser(args)
         self.url = self.prep_url(args.url)
         self.ip = self.dig(urlparse.urlparse(self.url).hostname)
-        self.stats = stats
+        self.stats = {'times':[],'crawled':0,'err':[]}
 
         # Grab the current worker name
-        self.name = '{} ({})'.format(
-                    multiprocessing.current_process().name,
+        self.name = 'Worker ({})'.format(
                     os.getpid()
                     )
 
         # Start the crawl
-        self.stats['crawled'] += self.get_links(self.url)
-        self.retval=self.stats
-        count_beans(self.stats, args.s)
+        try:
+            self.get_links(self.url)
+        except:
+            c_conn.send(self.stats)
+            raise
+        finally:
+            c_conn.send(self.stats)
 
     def prep_url(self,url):
         return 'http://'+url if 'http' not in url else url
@@ -115,30 +119,27 @@ class Spider:
         return ip
 
     def get_links(self, url):
-        if time.clock()-self.args.start >= self.args.maxtime:
-            print time.clock()-self.args.start
-            print self.args.maxtime
-            return 0
         print '{} : Crawling '.format(self.name), url
         start = time.clock()
         req = self.browser.open(url)
-        cnt = 1
-        self.stats['time']=time.clock()-start
+        self.stats['crawled']+=1
+        self.stats['times'].append(time.clock()-start)
         for link in self.browser.links():
+            if time.clock()-args.start >= args.maxtime:
+                break
             if link.absolute_url not in self.history:
                 ln = link.absolute_url
                 dom = urlparse.urlparse(ln).hostname
                 if dom and self.ip == self.dig(dom):
                     self.history.append(ln)
                     try:
-                        cnt += self.get_links(ln)
+                        self.get_links(ln)
                     except Exception as e:
                         if self.args.debug:
                             print '{} : '.format(ln),str(e)
                         self.stats['err'].append(
                             { 'error': str(e),'url':ln }
                             )
-        return cnt
 
 def prep_browser(args):
 
@@ -168,7 +169,7 @@ def prep_browser(args):
                 + 'AppleWebKit/533.1 (KHTML, like Gecko) ' \
                 + 'Version/4.0 Mobile Safari/533.1'
                 ]
-            ua = possibles[random.randint(1,len(possibles))]
+            ua = possibles[random.randint(1,len(possibles)-1)]
 
     headers = [('User-Agent', ua)]
 
@@ -193,41 +194,54 @@ def prep_browser(args):
 
     return b
 
-def report(stats,start):
+def report(args):
+    stats = args.s
 
     bar = '============================='
-    print bar
-    print 'Links crawled : ', stats.crawled_count
+    print '\n', bar
+    print 'Links crawled    : {}'.format(stats.crawled_count)
     try:
-        print 'Average time  : ', sum(stats.times)/float(len(stats.times))
+        avg_time = sum(stats.times)/float(len(stats.times))
+        print 'Avg load time    : {:.5f}'.format(avg_time)
     except:
         print '0',
     else:
-        print '\n\tMax time : ', max(stats.times)
-        print '\tMin time : ', min(stats.times)
-    print '\nErrors hit    : ', len(stats.err)
+        print '\tMax time : {:.5f}'.format(max(stats.times))
+        print '\tMin time : {:.5f}'.format(min(stats.times))
+        print '\tTotal    : {:.5f}'.format(sum(stats.times))
+    print '\nErrors hit       : {}'.format(len(stats.err))
     if len(stats.err)>0:
         if raw_input('\tView error detail? (y/n) > ').lower()=='y':
             print '\tDisplaying top 5 errors'
-            srtd_list = sorted(stats.err.items(),key=operator.itemgetter(1))
+            srtd_list = sorted(
+                            stats.err.items(),
+                            key=operator.itemgetter(1)
+                            )
             for key in srtd_list[:5]:
                 print '\t{}\n\t\tCount : {}'.format(key,stats.err[key])
-    print '\nTook {}s'.format(time.clock()-start)
     print bar
 
 def count_beans(stats,s):
     s.crawled(stats['crawled'])
-    s.time(stats['time'])
+    s.time(stats['times'])
     for e in stats['err']:
         s.err(e)
 
-def jobs_terminate(jobs):
+def jobs_terminate(args,jobs):
+    print 'Terminating jobs...'
     for j in jobs:
-        j.close()
+        if args.report:
+            retval = j[1].recv()
+            if args.debug:
+                print 'Received : ', retval, '\n'
+            count_beans(retval,args.s)
+        j[0].terminate()
 
-def jobs_join(jobs):
+def jobs_join(args,jobs):
     for j in jobs:
-        j.join()
+        if args.report:
+            count_beans(j[1].recv(),args.s)
+        j[0].join(args.maxtime)
 
 if __name__=="__main__":
 
@@ -236,41 +250,34 @@ if __name__=="__main__":
     args.start = start
     args.s = Stats()
     jobs = []
-    with multiprocessing.Manager() as manager:
-        stats = manager.dict()
-        stats['err']=[]
-        stats['crawled']=0
 
-        # multiprocessing.pool/apply async
-        # Block signals before creating the process pool
-        #orig_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        #pool = multiprocessing.Pool()
-        # return to original handler
-        #signal.signal(signal.SIGINT, orig_sigint_handler)
-
-        try:
+    try:
+        while time.clock()-start <= args.maxtime:
             for i in range(args.procs):
-                #r = pool.apply_async(Spider, (args,), callback=count_beans)
-                #r.wait()
-                p = multiprocessing.Process(
+                p_conn, c_conn = Pipe()
+                p = Process(
                             target = Spider,
-                            args = (args,stats)
+                            args = ((args,c_conn),)
                             )
                 p.start()
-                jobs.append(p)
-        except KeyboardInterrupt:
-            print 'Keyboard interrupt detected!'
-            jobs_terminate(jobs)
-        except Exception as e:
-            jobs_terminate(jobs)
-            if args.debug:
-                raise
+                jobs.append((p,p_conn))
+            if any([j[0].is_alive() for j in jobs]):
+                time.sleep(0.1)
             else:
-                print 'Error encountered :', str(e)
+                jobs_join(args,jobs)
         else:
-            print '[*] Crawl completed'
-            #pool.close()
-            #pool.join()
-            jobs_join(jobs)
-        finally:
-            if args.report: report(args.s, start)
+            job_terminate(args,jobs)
+    except KeyboardInterrupt:
+        print '\nKeyboard interrupt detected!'
+        jobs_terminate(args,jobs)
+    except Exception as e:
+        jobs_terminate(args,jobs)
+        if args.debug:
+            raise
+        else:
+            print '\nError encountered :', str(e)
+            jobs_terminate(args,jobs)
+    else:
+        print '[*] Crawl completed successfully'
+    finally:
+        if args.report: report(args)
