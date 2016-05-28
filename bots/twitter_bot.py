@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import imp
-pokeybots = imp.load_source('pokeybots','/home/pokeybill/python/projects/pokey/pokeybots.py')
+import pokeybots
+
+#import imp
+#pokeybots = imp.load_source('pokeybots','/home/pokeybill/python/projects/pokey/pokeybots.py')
 
 #from pokeybots import PokeyTwit
 
